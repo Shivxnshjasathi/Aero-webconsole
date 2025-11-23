@@ -18,15 +18,24 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     
     <style>
-        body { background-color: #f3f4f6; font-family: 'Inter', sans-serif; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        body { background-color: #f1f5f9; font-family: 'Inter', sans-serif; overflow: hidden; }
+        
+        /* Custom Scrollbar */
+        .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
         .custom-scroll::-webkit-scrollbar-track { background: transparent; }
         .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         .custom-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        /* Simple emoji font fix */
-        .emoji-icon { font-style: normal; line-height: 1; display: inline-block; }
+        
+        /* Utility */
+        .emoji-icon { font-style: normal; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+        .glass { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(8px); border-bottom: 1px solid rgba(226, 232, 240, 0.8); }
+        
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        
+        /* Drag and Drop Styles */
+        .drag-over { border: 2px dashed #6366f1; background-color: #e0e7ff; }
     </style>
 </head>
 <body>
@@ -44,126 +53,320 @@
             measurementId: "G-X911SP4TCZ"
         };
 
-        // Initialize Firebase
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
 
         // --- 2. WIDGET TEMPLATES ---
         const WIDGET_TEMPLATES = {
-            'Column': {
-                type: 'Column',
-                crossAxisAlignment: 'start',
-                mainAxisAlignment: 'start',
-                padding: [0, 0, 0, 0],
-                children: []
-            },
-            'Row': {
-                type: 'Row',
-                crossAxisAlignment: 'center',
-                mainAxisAlignment: 'start',
-                children: []
-            },
-            'Text': {
-                type: 'Text',
-                data: 'New Text',
-                style: 'bodyMedium',
-                color: '#000000'
-            },
-            'SizedBox': {
-                type: 'SizedBox',
-                height: 20,
-                width: 20
-            },
-            'Image': {
-                type: 'Image',
-                url: 'https://via.placeholder.com/150',
-                width: 100,
-                height: 100
-            },
-            'Button': {
-                type: 'Button',
-                label: 'Click Me',
-                actionType: 'NONE'
-            },
-            'TextField': {
-                type: 'TextField',
-                label: 'Enter text',
-                placeholder: 'Placeholder...'
-            }
+            'Column': { type: 'Column', crossAxisAlignment: 'start', mainAxisAlignment: 'start', padding: [0, 0, 0, 0], children: [] },
+            'Row': { type: 'Row', crossAxisAlignment: 'center', mainAxisAlignment: 'start', children: [] },
+            'Text': { type: 'Text', data: 'New Text', style: 'bodyMedium', color: '#000000' },
+            'SizedBox': { type: 'SizedBox', height: 20, width: 20 },
+            'Image': { type: 'Image', url: 'https://via.placeholder.com/150', width: 100, height: 100 },
+            'Button': { type: 'Button', label: 'Click Me', actionType: 'NONE' },
+            'TextField': { type: 'TextField', label: 'Enter text', placeholder: 'Placeholder...' }
         };
 
         // --- 3. HELPER COMPONENTS ---
         const Icon = ({ name, size = 16, className }) => {
             const iconMap = {
-                'layout': '🔲',
-                'type': 'Tt',
-                'image': '🖼️',
-                'box': '⬜',
-                'mouse-pointer-2': '👆',
-                'plus': '+',
-                'trash-2': '🗑️',
-                'loader-2': '⏳',
-                'rocket': '🚀',
-                'x': '✕',
-                'alert-triangle': '⚠️',
-                'check': '✅'
+                'layout': '🔲', 'type': 'Tt', 'image': '🖼️', 'box': '⬜', 'mouse-pointer-2': '👆',
+                'plus': '+', 'trash-2': '🗑️', 'loader-2': '⏳', 'rocket': '🚀', 'x': '✕',
+                'alert-triangle': '⚠️', 'check': '✅', 'eye': '👁️', 'code': '⚡', 'settings': '⚙️',
+                'folder': '📁', 'file': '📄', 'git-diff': '↔️', 'save': '💾', 'download': '📥',
+                'move': '↕️'
+            };
+            return <span className={`emoji-icon ${className || ''}`} style={{ fontSize: size }}>{iconMap[name] || '?'}</span>;
+        };
+
+        // --- 4. EXTRACTED SUB-COMPONENTS (Fixed Focus & Added DnD) ---
+
+        const WidgetTreeItem = ({ node, path, index, level = 0, selectedPath, setSelectedPath, setInspectNode, moveNode }) => {
+            const isSelected = JSON.stringify(path) === JSON.stringify(selectedPath);
+            const hasChildren = node.children && Array.isArray(node.children);
+            const [isHovered, setIsHovered] = React.useState(false);
+            const [isDragOver, setIsDragOver] = React.useState(false);
+
+            const handleDragStart = (e) => {
+                e.dataTransfer.setData('application/json', JSON.stringify(path));
+                e.dataTransfer.effectAllowed = 'move';
+                e.stopPropagation();
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault(); // Necessary to allow dropping
+                e.dataTransfer.dropEffect = 'move';
+                if (!isDragOver) setIsDragOver(true);
+            };
+
+            const handleDragLeave = () => {
+                setIsDragOver(false);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+                const sourcePath = JSON.parse(e.dataTransfer.getData('application/json'));
+                // Trigger move logic
+                moveNode(sourcePath, path);
+                e.stopPropagation();
             };
 
             return (
-                <span 
-                    className={`emoji-icon ${className || ''}`}
-                    style={{ fontSize: size }}
-                >
-                    {iconMap[name] || '?'}
-                </span>
+                <div>
+                    <div 
+                        draggable="true"
+                        onDragStart={handleDragStart}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        className={`group flex items-center justify-between py-1.5 px-3 cursor-pointer text-sm mb-1 rounded-md transition-all duration-200
+                            ${isSelected ? 'bg-indigo-50 text-indigo-700 font-medium' : 'hover:bg-slate-100 text-slate-600'}
+                            ${isDragOver ? 'drag-over ring-2 ring-indigo-400' : ''}
+                        `}
+                        style={{ paddingLeft: `${level * 16 + 12}px` }}
+                        onClick={(e) => { e.stopPropagation(); setSelectedPath(path); }}
+                        onMouseEnter={() => setIsHovered(true)}
+                        onMouseLeave={() => setIsHovered(false)}
+                    >
+                        <div className="flex items-center overflow-hidden">
+                            {/* Drag Handle Indicator */}
+                            <span className={`mr-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 ${isHovered ? 'opacity-100' : 'opacity-0'}`} title="Drag to reorder">
+                                <Icon name="move" size={10} />
+                            </span>
+                            
+                            <span className={`mr-2.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-60'}`}>
+                                {node.type === 'Column' || node.type === 'Row' ? <Icon name="layout" size={14} /> : 
+                                 node.type === 'Text' ? <Icon name="type" size={14} /> :
+                                 node.type === 'Image' ? <Icon name="image" size={14} /> :
+                                 <Icon name="box" size={14} />}
+                            </span>
+                            <span className="truncate tracking-tight select-none">{node.type}</span>
+                            {node.id && <span className={`ml-2 text-[10px] font-mono opacity-60 truncate`}>#{node.id}</span>}
+                        </div>
+                        
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setInspectNode(node); }}
+                            className={`
+                                p-1 rounded hover:bg-white transition-all
+                                ${(isHovered || isSelected) ? 'opacity-100' : 'opacity-0'}
+                            `}
+                            title="View Node JSON"
+                        >
+                            <Icon name="eye" size={12} className={isSelected ? "text-indigo-600" : "text-slate-400"}/>
+                        </button>
+                    </div>
+                    
+                    {hasChildren && (
+                        <div className="relative">
+                            <div className="absolute left-[calc(12px+4px)] top-0 bottom-0 w-px bg-slate-200" style={{ left: `${level * 16 + 19}px` }}></div>
+                            {node.children.map((child, i) => (
+                                <WidgetTreeItem 
+                                    key={i} 
+                                    node={child} 
+                                    path={[...path, 'children', i]} 
+                                    index={i} 
+                                    level={level + 1}
+                                    selectedPath={selectedPath}
+                                    setSelectedPath={setSelectedPath}
+                                    setInspectNode={setInspectNode}
+                                    moveNode={moveNode}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
             );
         };
 
-        // --- 4. MAIN APPLICATION ---
+        const DiffViewer = ({ originalSpec, spec }) => {
+            const oldJson = JSON.stringify(originalSpec, null, 2) || '';
+            const newJson = JSON.stringify(spec, null, 2) || '';
+            
+            const oldLines = oldJson.split('\n');
+            const newLines = newJson.split('\n');
+            
+            return (
+                <div className="flex h-full text-xs font-mono">
+                    <div className="flex-1 border-r border-slate-700 p-4 overflow-auto custom-scroll bg-slate-900 text-slate-400">
+                        <h4 className="text-slate-500 font-bold mb-2 uppercase tracking-wider text-[10px]">Last Saved (Original)</h4>
+                        {oldLines.map((line, i) => (
+                            <div key={i} className="whitespace-pre hover:bg-slate-800/50 px-1">{line}</div>
+                        ))}
+                    </div>
+                    <div className="flex-1 p-4 overflow-auto custom-scroll bg-slate-900 text-slate-200">
+                        <h4 className="text-emerald-500 font-bold mb-2 uppercase tracking-wider text-[10px]">Current Draft (Modified)</h4>
+                        {newLines.map((line, i) => {
+                            const isModified = oldLines[i] !== line;
+                            return (
+                                <div key={i} className={`whitespace-pre px-1 ${isModified ? 'bg-indigo-900/40 text-indigo-300 border-l-2 border-indigo-500' : 'hover:bg-slate-800/50'}`}>
+                                    {line}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        const PropertyEditor = ({ node, selectedPath, updateNode, deleteNode, setShowAddModal }) => {
+            if (!node) return (
+                <div className="h-full flex flex-col items-center justify-center text-slate-400 animate-fade-in">
+                    <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm text-slate-300">
+                        <Icon name="mouse-pointer-2" size={32} />
+                    </div>
+                    <p className="font-medium text-slate-500">Select a widget to edit properties</p>
+                </div>
+            );
+
+            return (
+                <div className="max-w-3xl mx-auto w-full p-8 h-full overflow-y-auto custom-scroll animate-fade-in">
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    {node.type}
+                                </h2>
+                                <div className="text-xs text-slate-400 mt-1 font-mono flex items-center gap-1">
+                                    <Icon name="folder" size={12} />
+                                    {selectedPath.length ? selectedPath.join(' / ') : 'root'}
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                { (node.type === 'Column' || node.type === 'Row') && (
+                                    <button onClick={() => setShowAddModal(true)} className="flex items-center px-3 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg hover:border-indigo-500 hover:text-indigo-600 text-sm font-medium transition-all shadow-sm">
+                                        <Icon name="plus" size={14} className="mr-1.5"/> Add Child
+                                    </button>
+                                )}
+                                {selectedPath.length > 0 && (
+                                    <button onClick={() => deleteNode(selectedPath)} className="flex items-center px-3 py-1.5 bg-white border border-slate-200 text-rose-600 rounded-lg hover:bg-rose-50 hover:border-rose-200 text-sm font-medium transition-all shadow-sm">
+                                        <Icon name="trash-2" size={14} className="mr-1.5"/> Delete
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="p-6 space-y-6">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Identifier</label>
+                                <input type="text" value={node.id || ''} onChange={(e) => updateNode(selectedPath, { id: e.target.value })} 
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all placeholder-slate-400"
+                                    placeholder="Optional Widget ID"/>
+                            </div>
+                                
+                            {node.type === 'Text' && (
+                                <>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Content</label>
+                                        <input type="text" value={node.data || ''} onChange={(e) => updateNode(selectedPath, { data: e.target.value })} 
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Typography</label>
+                                        <select value={node.style || 'bodyMedium'} onChange={(e) => updateNode(selectedPath, { style: e.target.value })} 
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+                                            <option value="displayLarge">Display Large (32pt)</option>
+                                            <option value="headlineSmall">Headline Small (24pt)</option>
+                                            <option value="bodyLarge">Body Large (16pt)</option>
+                                            <option value="bodyMedium">Body Medium (14pt)</option>
+                                            <option value="labelSmall">Label Small (11pt)</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+
+                            {(node.type === 'Column' || node.type === 'Row') && (
+                                <div className="grid grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Main Axis</label>
+                                        <select value={node.mainAxisAlignment || 'start'} onChange={(e) => updateNode(selectedPath, { mainAxisAlignment: e.target.value })} 
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+                                            <option value="start">Start</option>
+                                            <option value="center">Center</option>
+                                            <option value="end">End</option>
+                                            <option value="spaceBetween">Space Between</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Cross Axis</label>
+                                        <select value={node.crossAxisAlignment || 'start'} onChange={(e) => updateNode(selectedPath, { crossAxisAlignment: e.target.value })} 
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+                                            <option value="start">Start</option>
+                                            <option value="center">Center</option>
+                                            <option value="end">End</option>
+                                            <option value="stretch">Stretch</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {node.type === 'SizedBox' && (
+                                <div className="grid grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Height</label>
+                                        <input type="number" value={node.height || 0} onChange={(e) => updateNode(selectedPath, { height: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Width</label>
+                                        <input type="number" value={node.width || 0} onChange={(e) => updateNode(selectedPath, { width: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {node.type === 'Image' && (
+                                <>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Image URL</label>
+                                        <input type="text" value={node.url || ''} onChange={(e) => updateNode(selectedPath, { url: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Height</label>
+                                            <input type="number" value={node.height || 100} onChange={(e) => updateNode(selectedPath, { height: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Width</label>
+                                            <input type="number" value={node.width || 100} onChange={(e) => updateNode(selectedPath, { width: Number(e.target.value) })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 5. MAIN APPLICATION ---
         const App = () => {
             const [specId, setSpecId] = React.useState('new_screen');
             const [spec, setSpec] = React.useState(null);
+            const [originalSpec, setOriginalSpec] = React.useState(null); // For Diff
             const [selectedPath, setSelectedPath] = React.useState([]); 
             const [loading, setLoading] = React.useState(false);
             const [status, setStatus] = React.useState('Initializing...');
             const [showAddModal, setShowAddModal] = React.useState(false);
             
-            // Error States
+            // New UI State
+            const [showDiffModal, setShowDiffModal] = React.useState(false);
+            const [inspectNode, setInspectNode] = React.useState(null);
+            
             const [authError, setAuthError] = React.useState(null);
             const [dbError, setDbError] = React.useState(null);
 
-            // Initial Load
-            React.useEffect(() => {
-                initializeApp();
-            }, []); 
-
-            // Refresh when specId changes
-            React.useEffect(() => {
-                if (!loading && !dbError) {
-                    fetchSpec();
-                }
-            }, [specId]);
+            React.useEffect(() => { initializeApp(); }, []); 
+            React.useEffect(() => { if (!loading && !dbError) fetchSpec(); }, [specId]);
 
             const initializeApp = async () => {
-                setLoading(true);
-                setAuthError(null);
-                setDbError(null);
-                
+                setLoading(true); setAuthError(null); setDbError(null);
                 try {
-                    // Try to sign in anonymously
                     await auth.signInAnonymously();
-                    setStatus('Authenticated');
-                    // Once authenticated, fetch data
+                    setStatus('Ready');
                     await fetchSpec();
                 } catch (err) {
-                    console.error("Auth Error:", err);
                     if (err.code === 'auth/configuration-not-found' || err.code === 'auth/operation-not-allowed') {
                         setAuthError('Anonymous Authentication is not enabled in Firebase Console.');
-                        // Try to fetch anyway in case rules are public, but likely will fail
-                        await fetchSpec();
                     } else {
                         setAuthError(err.message);
                     }
@@ -171,79 +374,64 @@
                 setLoading(false);
             };
 
-            // --- FIREBASE FUNCTIONS ---
             const fetchSpec = async () => {
-                setStatus('Loading data...');
+                setStatus('Loading...');
                 try {
                     const doc = await db.collection('aero_specs').doc(specId).get();
+                    let data;
                     if (doc.exists && doc.data().spec) {
-                        setSpec(doc.data().spec);
-                        setStatus('Loaded successfully.');
+                        data = doc.data().spec;
+                        setStatus('Loaded');
                     } else {
-                        // Default starter spec
-                        setSpec(WIDGET_TEMPLATES['Column']);
-                        setStatus('New spec created (unsaved).');
+                        data = WIDGET_TEMPLATES['Column'];
+                        setStatus('New Spec');
                     }
-                    setSelectedPath([]); // Reset selection
-                    setDbError(null); // Clear db errors if successful
+                    setSpec(data);
+                    setOriginalSpec(JSON.parse(JSON.stringify(data))); 
+                    setSelectedPath([]); 
+                    setDbError(null);
                 } catch (err) {
-                    console.error("Fetch Error:", err);
-                    if (err.code === 'permission-denied') {
-                        setDbError('Missing Permissions');
-                    } else {
-                        setDbError(err.message);
-                    }
-                    setStatus('Error loading data');
+                    if (err.code === 'permission-denied') setDbError('Missing Permissions');
+                    else setDbError(err.message);
+                    setStatus('Error');
                 }
             };
 
             const saveSpec = async () => {
-                setLoading(true);
-                setStatus('Saving...');
+                setLoading(true); setStatus('Saving...');
                 try {
-                    await db.collection('aero_specs').doc(specId).set({ 
-                        spec,
-                        lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    setStatus('Saved to Firebase!');
-                    setTimeout(() => setStatus(''), 3000);
+                    await db.collection('aero_specs').doc(specId).set({ spec, lastUpdated: firebase.firestore.FieldValue.serverTimestamp() });
+                    setOriginalSpec(JSON.parse(JSON.stringify(spec))); 
+                    setStatus('Saved!');
+                    setTimeout(() => setStatus('Ready'), 3000);
                 } catch (err) {
-                    console.error("Save Error:", err);
                     if (err.code === 'permission-denied') {
                         setDbError('Missing Permissions');
-                        alert("Permission Denied: Could not save to database. Check Firebase Rules.");
+                        alert("Permission Denied: Check Firebase Rules.");
                     } else {
                         alert("Error saving: " + err.message);
                     }
-                    setStatus('Error saving');
+                    setStatus('Error');
                 }
                 setLoading(false);
             };
 
-            // --- TREE LOGIC ---
+            // --- LOGIC ---
             const getNode = (path, currentSpec = spec) => {
                 if (path.length === 0) return currentSpec;
                 let current = currentSpec;
                 for (let key of path) {
-                    if (current && current[key] !== undefined) {
-                        current = current[key];
-                    } else {
-                        return null;
-                    }
+                    if (current && current[key] !== undefined) current = current[key];
+                    else return null;
                 }
                 return current;
             };
 
             const updateNode = (path, newData) => {
                 const newSpec = JSON.parse(JSON.stringify(spec));
-                if (path.length === 0) {
-                    setSpec({ ...newSpec, ...newData });
-                    return;
-                }
+                if (path.length === 0) { setSpec({ ...newSpec, ...newData }); return; }
                 let current = newSpec;
-                for (let i = 0; i < path.length - 1; i++) {
-                    current = current[path[i]];
-                }
+                for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
                 current[path[path.length - 1]] = { ...current[path[path.length - 1]], ...newData };
                 setSpec(newSpec);
             };
@@ -251,371 +439,260 @@
             const addChild = (parentPath, widgetType) => {
                 const newSpec = JSON.parse(JSON.stringify(spec));
                 const newWidget = JSON.parse(JSON.stringify(WIDGET_TEMPLATES[widgetType]));
-
-                if (parentPath.length === 0) {
-                    if (!newSpec.children) newSpec.children = [];
-                    newSpec.children.push(newWidget);
-                } else {
-                    let current = newSpec;
-                    for (let key of parentPath) {
-                        current = current[key];
-                    }
-                    if (!current.children) current.children = [];
-                    current.children.push(newWidget);
+                let parent = newSpec;
+                if (parentPath.length > 0) {
+                    for (let key of parentPath) parent = parent[key];
                 }
+                if (!parent.children) parent.children = [];
+                parent.children.push(newWidget);
                 setSpec(newSpec);
                 setShowAddModal(false);
             };
 
             const deleteNode = (path) => {
-                if (path.length === 0) {
-                    alert("Cannot delete root node. You can only modify it.");
-                    return;
-                }
+                if (path.length === 0) { alert("Cannot delete root node."); return; }
                 const newSpec = JSON.parse(JSON.stringify(spec));
                 let parent = newSpec;
-                for (let i = 0; i < path.length - 2; i++) {
-                    parent = parent[path[i]];
-                }
-                const index = path[path.length - 1];
-                parent[path[path.length - 2]].splice(index, 1);
-                
+                for (let i = 0; i < path.length - 2; i++) parent = parent[path[i]];
+                parent[path[path.length - 2]].splice(path[path.length - 1], 1);
                 setSpec(newSpec);
                 setSelectedPath([]); 
             };
 
-            // --- UI SUB-COMPONENTS ---
-            const SetupGuide = () => (
-                <div className="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
-                        <h2 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">
-                            <Icon name="alert-triangle" size={24}/> Connection Issue
-                        </h2>
-                        
-                        {authError && (
-                            <div className="mb-6 p-4 bg-orange-50 border border-orange-200 rounded text-sm text-orange-800">
-                                <strong className="block mb-1">Authentication Error:</strong>
-                                {authError}
-                                <div className="mt-2 text-xs text-orange-600">
-                                    <strong>Fix:</strong> Go to Firebase Console &rarr; Build &rarr; Authentication &rarr; Sign-in method &rarr; Enable <strong>Anonymous</strong>.
-                                </div>
-                            </div>
-                        )}
-
-                        {dbError === 'Missing Permissions' && (
-                            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800">
-                                <strong className="block mb-1">Database Permission Denied:</strong>
-                                Your Firestore Security Rules are blocking access.
-                                <div className="mt-2 text-xs text-slate-600 bg-slate-100 p-2 rounded font-mono border border-slate-200">
-                                    allow read, write: if true; <span className="text-gray-400">// For Test Mode</span><br/>
-                                    <span className="text-gray-400">OR</span><br/>
-                                    allow read, write: if request.auth != null; <span className="text-gray-400">// If Auth enabled</span>
-                                </div>
-                            </div>
-                        )}
-
-                        <button 
-                            onClick={initializeApp}
-                            className="w-full py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 transition-colors"
-                        >
-                            Retry Connection
-                        </button>
-                    </div>
-                </div>
-            );
-
-            const WidgetTreeItem = ({ node, path, index, level = 0 }) => {
-                const isSelected = JSON.stringify(path) === JSON.stringify(selectedPath);
-                const hasChildren = node.children && Array.isArray(node.children);
+            // DnD Logic
+            const moveNode = (sourcePath, targetPath) => {
+                if (sourcePath.length === 0) { alert("Cannot move root."); return; }
+                if (JSON.stringify(sourcePath) === JSON.stringify(targetPath)) return;
                 
-                const handleClick = (e) => {
-                    e.stopPropagation();
-                    setSelectedPath(path);
-                };
+                // Prevent dropping parent into its own child
+                // Check if sourcePath is a prefix of targetPath
+                const isParentOfTarget = sourcePath.length < targetPath.length && 
+                    sourcePath.every((val, index) => val === targetPath[index]);
+                
+                if (isParentOfTarget) {
+                    alert("Cannot move a parent node into its own child.");
+                    return;
+                }
 
-                return (
-                    <div>
-                        <div 
-                            className={`flex items-center py-2 px-3 cursor-pointer text-sm mb-0.5 rounded transition-colors
-                                ${isSelected ? 'bg-blue-600 text-white shadow-sm' : 'hover:bg-gray-100 text-gray-700'}
-                            `}
-                            style={{ paddingLeft: `${level * 16 + 12}px` }}
-                            onClick={handleClick}
-                        >
-                            <span className={`mr-2 ${isSelected ? 'opacity-100' : 'opacity-50'}`}>
-                                {node.type === 'Column' || node.type === 'Row' ? <Icon name="layout" size={14} /> : 
-                                 node.type === 'Text' ? <Icon name="type" size={14} /> :
-                                 node.type === 'Image' ? <Icon name="image" size={14} /> :
-                                 <Icon name="box" size={14} />}
-                            </span>
-                            <span className="font-medium truncate">{node.type}</span>
-                            {node.id && <span className={`ml-2 text-xs truncate ${isSelected ? 'text-blue-200' : 'text-gray-400'}`}>#{node.id}</span>}
-                        </div>
-                        
-                        {hasChildren && node.children.map((child, i) => (
-                            <WidgetTreeItem 
-                                key={i} 
-                                node={child} 
-                                path={[...path, 'children', i]} 
-                                index={i} 
-                                level={level + 1}
-                            />
-                        ))}
-                    </div>
-                );
-            };
+                const newSpec = JSON.parse(JSON.stringify(spec));
 
-            const PropertyField = ({ label, children }) => (
-                <div className="mb-4">
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 tracking-wide">{label}</label>
-                    {children}
-                </div>
-            );
+                // 1. Get Item
+                let sourceParent = newSpec;
+                for(let i=0; i<sourcePath.length-2; i++) sourceParent = sourceParent[sourcePath[i]];
+                const sourceIndex = sourcePath[sourcePath.length-1];
+                const itemToMove = sourceParent[sourcePath[sourcePath.length-2]][sourceIndex];
 
-            const PropertyEditor = () => {
-                const node = getNode(selectedPath);
-                if (!node) return (
-                    <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                        <Icon name="mouse-pointer-2" size={48} className="mb-4 opacity-20"/>
-                        <p>Select a widget from the tree to edit</p>
-                    </div>
-                );
+                // 2. Remove Item
+                sourceParent[sourcePath[sourcePath.length-2]].splice(sourceIndex, 1);
 
-                const handleChange = (field, value) => {
-                    updateNode(selectedPath, { [field]: value });
-                };
+                // 3. Insert Item (adjust target path if needed because we modified the tree)
+                // If source and target are in same array, and source was before target, target index needs decrement
+                let targetParent = newSpec;
+                // Navigate to target parent
+                for(let i=0; i<targetPath.length-2; i++) targetParent = targetParent[targetPath[i]];
+                
+                let targetIndex = targetPath[targetPath.length-1];
+                
+                // Special check: Are we in same children array?
+                const sameParent = sourcePath.length === targetPath.length && 
+                    sourcePath.slice(0, -1).every((val, idx) => val === targetPath[idx]);
 
-                return (
-                    <div className="p-6 h-full overflow-y-auto custom-scroll">
-                        <div className="flex justify-between items-start mb-6 border-b border-gray-100 pb-4">
-                            <div>
-                                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                                    {node.type}
-                                    <span className="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Widget</span>
-                                </h2>
-                                <div className="text-xs text-gray-400 mt-1 font-mono">path: {selectedPath.length ? selectedPath.join('/') : 'root'}</div>
-                            </div>
-                            <div className="flex gap-2">
-                                { (node.type === 'Column' || node.type === 'Row') && (
-                                    <button 
-                                        onClick={() => setShowAddModal(true)}
-                                        className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 text-sm font-medium transition-colors"
-                                    >
-                                        <Icon name="plus" size={16} className="mr-1.5"/> Add Child
-                                    </button>
-                                )}
-                                {selectedPath.length > 0 && (
-                                    <button 
-                                        onClick={() => deleteNode(selectedPath)}
-                                        className="flex items-center px-3 py-1.5 bg-red-50 text-red-600 rounded-md hover:bg-red-100 text-sm font-medium transition-colors"
-                                    >
-                                        <Icon name="trash-2" size={16} className="mr-1.5"/> Delete
-                                    </button>
-                                )}
-                            </div>
-                        </div>
+                if (sameParent && sourceIndex < targetIndex) {
+                     // Since we removed an item before the target, the target shifted down by 1
+                     targetIndex--;
+                }
 
-                        <div className="bg-white rounded-lg space-y-1">
-                            {/* Common Props */}
-                            <PropertyField label="Widget ID">
-                                <input 
-                                    type="text" 
-                                    value={node.id || ''} 
-                                    onChange={(e) => handleChange('id', e.target.value)}
-                                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                                    placeholder="e.g. hero_image"
-                                />
-                            </PropertyField>
+                // Insert BEFORE the target node
+                targetParent[targetPath[targetPath.length-2]].splice(targetIndex, 0, itemToMove);
 
-                            {/* Conditional Props */}
-                            {node.type === 'Text' && (
-                                <>
-                                    <PropertyField label="Text Content">
-                                        <input 
-                                            type="text" 
-                                            value={node.data || ''} 
-                                            onChange={(e) => handleChange('data', e.target.value)}
-                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                                        />
-                                    </PropertyField>
-                                    <PropertyField label="Typography">
-                                        <select 
-                                            value={node.style || 'bodyMedium'} 
-                                            onChange={(e) => handleChange('style', e.target.value)}
-                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
-                                        >
-                                            <option value="displayLarge">Display Large (32pt)</option>
-                                            <option value="headlineSmall">Headline Small (24pt)</option>
-                                            <option value="bodyLarge">Body Large (16pt)</option>
-                                            <option value="bodyMedium">Body Medium (14pt)</option>
-                                            <option value="labelSmall">Label Small (11pt)</option>
-                                        </select>
-                                    </PropertyField>
-                                </>
-                            )}
-
-                            {(node.type === 'Column' || node.type === 'Row') && (
-                                <div className="grid grid-cols-2 gap-4">
-                                    <PropertyField label="Main Axis">
-                                        <select 
-                                            value={node.mainAxisAlignment || 'start'} 
-                                            onChange={(e) => handleChange('mainAxisAlignment', e.target.value)}
-                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
-                                        >
-                                            <option value="start">Start</option>
-                                            <option value="center">Center</option>
-                                            <option value="end">End</option>
-                                            <option value="spaceBetween">Space Between</option>
-                                        </select>
-                                    </PropertyField>
-                                    <PropertyField label="Cross Axis">
-                                        <select 
-                                            value={node.crossAxisAlignment || 'start'} 
-                                            onChange={(e) => handleChange('crossAxisAlignment', e.target.value)}
-                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
-                                        >
-                                            <option value="start">Start</option>
-                                            <option value="center">Center</option>
-                                            <option value="end">End</option>
-                                            <option value="stretch">Stretch</option>
-                                        </select>
-                                    </PropertyField>
-                                </div>
-                            )}
-
-                             {node.type === 'SizedBox' && (
-                                <div className="grid grid-cols-2 gap-4">
-                                    <PropertyField label="Height">
-                                        <input type="number" value={node.height || 0} onChange={(e) => handleChange('height', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                                    </PropertyField>
-                                    <PropertyField label="Width">
-                                        <input type="number" value={node.width || 0} onChange={(e) => handleChange('width', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                                    </PropertyField>
-                                </div>
-                            )}
-
-                            {node.type === 'Image' && (
-                                <>
-                                    <PropertyField label="Image URL">
-                                        <input type="text" value={node.url || ''} onChange={(e) => handleChange('url', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                                    </PropertyField>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <PropertyField label="Height">
-                                            <input type="number" value={node.height || 100} onChange={(e) => handleChange('height', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                                        </PropertyField>
-                                        <PropertyField label="Width">
-                                            <input type="number" value={node.width || 100} onChange={(e) => handleChange('width', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                                        </PropertyField>
-                                    </div>
-                                </>
-                            )}
-                        </div>
-
-                         <div className="mt-8 pt-6 border-t border-gray-100">
-                            <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">Raw JSON for Selection</h3>
-                            <div className="bg-slate-900 text-green-400 p-3 rounded-md text-xs font-mono overflow-auto max-h-48 border border-slate-700">
-                                <pre>{JSON.stringify(node, (key, value) => (key === 'children' ? '[Array]' : value), 2)}</pre>
-                            </div>
-                        </div>
-                    </div>
-                );
+                setSpec(newSpec);
+                setSelectedPath(targetPath); // Select moved item (path is slightly wrong here visually but ok)
             };
 
             // --- RENDER ---
             
-            // Show setup guide if errors exist
             if ((authError || dbError === 'Missing Permissions') && !spec) {
-                return <SetupGuide />;
+                return (
+                     <div className="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 animate-fade-in">
+                            <h2 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">
+                                <Icon name="alert-triangle" size={24}/> Connection Issue
+                            </h2>
+                            {authError && <div className="mb-4 text-sm text-slate-700"><strong>Auth Error:</strong> {authError}</div>}
+                            {dbError === 'Missing Permissions' && <div className="mb-4 text-sm text-slate-700"><strong>Database Error:</strong> Check Firestore Rules.</div>}
+                            <button onClick={initializeApp} className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Retry</button>
+                        </div>
+                    </div>
+                );
             }
 
             if (!spec) return (
-                <div className="flex flex-col items-center justify-center h-screen bg-gray-50 text-gray-500 gap-3">
-                    <div className="text-blue-600"><Icon name="loader-2" size={32}/></div> 
-                    <p className="font-medium">{status}</p>
+                <div className="flex flex-col items-center justify-center h-screen bg-slate-50 text-slate-400 gap-4">
+                    <div className="animate-spin text-indigo-500"><Icon name="loader-2" size={40}/></div> 
+                    <p className="font-medium animate-pulse">{status}</p>
                 </div>
             );
 
             return (
-                <div className="flex h-screen overflow-hidden text-slate-800">
-                    {/* LEFT: WIDGET TREE */}
-                    <div className="w-80 bg-white border-r border-gray-200 flex flex-col shadow-sm z-10">
-                        <div className="p-4 border-b border-gray-100">
-                            <h1 className="font-bold text-lg text-slate-800 flex items-center gap-2">
-                                <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white text-xs font-bold">A</div>
+                <div className="flex flex-col h-screen overflow-hidden text-slate-800 bg-slate-50">
+                    
+                    {/* TOP NAVIGATION BAR */}
+                    <header className="h-16 glass z-20 px-6 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-8">
+                            {/* Brand */}
+                            <div className="font-bold text-lg text-slate-800 flex items-center gap-2 tracking-tight">
+                                <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center text-white text-sm font-bold shadow-md shadow-indigo-200">A</div>
                                 Aero Console
-                            </h1>
-                            <div className="mt-4 flex gap-2">
+                            </div>
+                            
+                            {/* Spec ID Control */}
+                            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200">
+                                <span className="pl-2 text-xs font-bold text-slate-400 uppercase">ID:</span>
                                 <input 
-                                    className="flex-1 text-xs bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-blue-500 transition-colors" 
+                                    className="w-32 text-sm bg-transparent border-none focus:outline-none text-slate-700 font-mono" 
                                     value={specId} 
                                     onChange={(e)=>setSpecId(e.target.value)}
-                                    placeholder="Screen ID"
                                 />
-                                <button onClick={() => fetchSpec()} className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs font-medium hover:bg-gray-200 transition-colors">Load</button>
+                                <button onClick={() => fetchSpec()} className="px-3 py-1 bg-white text-slate-600 rounded-md text-xs font-bold hover:text-indigo-600 hover:shadow-sm transition-all shadow-sm">
+                                    Load
+                                </button>
                             </div>
                         </div>
-                        <div className="flex-1 overflow-y-auto custom-scroll py-2">
-                            <div className="px-4 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider">Hierarchy</div>
-                            <WidgetTreeItem node={spec} path={[]} index={0} />
-                        </div>
-                    </div>
 
-                    {/* MIDDLE: PROPERTY EDITOR */}
-                    <div className="flex-1 bg-gray-50 overflow-hidden relative flex flex-col">
-                        <div className="flex-1 overflow-hidden">
-                            <PropertyEditor />
-                        </div>
-                    </div>
-
-                    {/* RIGHT: LIVE PREVIEW & SAVE */}
-                    <div className="w-96 bg-white border-l border-gray-200 flex flex-col z-10 shadow-sm">
-                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                            <h3 className="text-sm font-bold text-gray-700">Spec JSON</h3>
-                            <div className={`text-xs font-medium px-2 py-1 rounded ${status.includes('Error') ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                                {status || 'Ready'}
+                        <div className="flex items-center gap-3">
+                            <div className={`text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-wider ${status.includes('Error') ? 'bg-rose-100 text-rose-600' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+                                Status: {status}
                             </div>
-                        </div>
-                        
-                        <div className="flex-1 bg-slate-900 overflow-auto p-4 custom-scroll">
-                            <pre className="text-xs font-mono text-emerald-400 whitespace-pre-wrap font-medium">{JSON.stringify(spec, null, 2)}</pre>
-                        </div>
+                            
+                            <div className="h-6 w-px bg-slate-200 mx-2"></div>
 
-                        <div className="p-4 border-t border-gray-200 bg-gray-50">
+                            {/* Diff / Code Toggle */}
                             <button 
-                                onClick={saveSpec} 
+                                onClick={() => setShowDiffModal(true)}
+                                className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors"
+                            >
+                                <Icon name="git-diff" size={16} /> 
+                                <span className="hidden sm:inline">Code & Diff</span>
+                            </button>
+
+                            {/* Primary Action: Publish */}
+                            <button 
+                                onClick={saveSpec}
                                 disabled={loading}
-                                className={`w-full py-3 rounded-lg font-bold shadow-sm transition-all flex items-center justify-center gap-2
-                                    ${loading ? 'bg-gray-300 cursor-not-allowed text-gray-500' : 'bg-blue-600 hover:bg-blue-700 text-white hover:shadow-md'}
+                                className={`flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-bold shadow-lg shadow-indigo-200 transition-all transform active:scale-95
+                                    ${loading ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none' : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:to-purple-700'}
                                 `}
                             >
-                                {loading ? <Icon name="loader-2" className="animate-spin" size={18}/> : <Icon name="rocket" size={18}/>}
-                                {loading ? 'Publishing...' : 'Publish to App'}
+                                {loading ? <Icon name="loader-2" className="animate-spin" size={16}/> : <Icon name="rocket" size={16}/>}
+                                {loading ? 'Saving...' : 'Publish'}
                             </button>
+                        </div>
+                    </header>
+
+                    {/* MAIN CONTENT AREA */}
+                    <div className="flex flex-1 overflow-hidden">
+                        {/* LEFT: WIDGET TREE */}
+                        <div className="w-72 bg-white border-r border-slate-200 flex flex-col z-10">
+                            <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex justify-between items-center">
+                                    Hierarchy
+                                    <span className="bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded text-[9px]">Root</span>
+                                </div>
+                            </div>
+                            <div className="flex-1 overflow-y-auto custom-scroll py-3 px-2">
+                                <WidgetTreeItem 
+                                    node={spec} 
+                                    path={[]} 
+                                    index={0} 
+                                    selectedPath={selectedPath}
+                                    setSelectedPath={setSelectedPath}
+                                    setInspectNode={setInspectNode}
+                                    moveNode={moveNode}
+                                />
+                            </div>
+                        </div>
+
+                        {/* CENTER: PROPERTY EDITOR */}
+                        <div className="flex-1 bg-slate-50 relative">
+                            <PropertyEditor 
+                                node={getNode(selectedPath)}
+                                selectedPath={selectedPath}
+                                updateNode={updateNode}
+                                deleteNode={deleteNode}
+                                setShowAddModal={setShowAddModal}
+                            />
                         </div>
                     </div>
 
-                    {/* MODAL: ADD WIDGET */}
+                    {/* --- MODALS --- */}
+
+                    {/* CODE / DIFF MODAL */}
+                    {showDiffModal && (
+                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-8" onClick={() => setShowDiffModal(false)}>
+                            <div className="bg-slate-900 rounded-xl shadow-2xl w-full max-w-5xl h-[85vh] flex flex-col border border-slate-700 overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800">
+                                    <div className="flex items-center gap-3">
+                                        <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400"><Icon name="git-diff" size={20}/></div>
+                                        <div>
+                                            <h3 className="text-white font-bold text-lg">Spec Diff Viewer</h3>
+                                            <p className="text-slate-400 text-xs">Comparing server version vs local changes</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setShowDiffModal(false)} className="text-slate-400 hover:text-white transition-colors p-2 hover:bg-slate-700 rounded-lg"><Icon name="x" size={20}/></button>
+                                </div>
+                                <div className="flex-1 overflow-hidden">
+                                    <DiffViewer originalSpec={originalSpec} spec={spec} />
+                                </div>
+                                <div className="p-4 border-t border-slate-700 bg-slate-800 flex justify-end gap-3">
+                                    <button onClick={() => setShowDiffModal(false)} className="px-4 py-2 text-slate-300 hover:text-white text-sm font-medium">Close</button>
+                                    <button onClick={() => { saveSpec(); setShowDiffModal(false); }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold shadow-lg">Merge & Publish</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* INSPECT MODAL (Single Node JSON) */}
+                    {inspectNode && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={() => setInspectNode(null)}>
+                            <div className="bg-white rounded-xl shadow-2xl w-[500px] max-h-[80vh] flex flex-col border border-slate-200 m-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+                                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                                    <div className="flex items-center gap-2 text-slate-700">
+                                        <Icon name="eye" size={18} className="text-indigo-500"/>
+                                        <span className="font-bold text-sm">Inspect: {inspectNode.type}</span>
+                                    </div>
+                                    <button onClick={() => setInspectNode(null)} className="text-slate-400 hover:text-slate-600 transition-colors"><Icon name="x" size={20}/></button>
+                                </div>
+                                <div className="p-0 overflow-y-auto custom-scroll bg-slate-900">
+                                    <pre className="p-6 text-xs font-mono text-emerald-400 whitespace-pre-wrap font-medium leading-relaxed">
+                                        {JSON.stringify(inspectNode, (key, value) => (key === 'children' ? '[Array]' : value), 2)}
+                                    </pre>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ADD WIDGET MODAL */}
                     {showAddModal && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
-                            <div className="bg-white rounded-xl shadow-2xl w-[500px] overflow-hidden transform scale-100 transition-all">
-                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                                    <h3 className="font-bold text-gray-800">Select Widget</h3>
-                                    <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors"><Icon name="x" size={20}/></button>
+                        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={() => setShowAddModal(false)}>
+                            <div className="bg-white rounded-2xl shadow-2xl w-[600px] overflow-hidden transform scale-100 transition-all border border-slate-100" onClick={e => e.stopPropagation()}>
+                                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                                    <h3 className="font-bold text-slate-800 text-lg">Add Widget</h3>
+                                    <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-full hover:bg-slate-100"><Icon name="x" size={20}/></button>
                                 </div>
                                 <div className="p-6 grid grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto custom-scroll">
                                     {Object.keys(WIDGET_TEMPLATES).map(key => (
                                         <button 
                                             key={key}
                                             onClick={() => addChild(selectedPath, key)}
-                                            className="group flex flex-col items-center justify-center p-4 border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all duration-200"
+                                            className="group flex flex-col items-center justify-center p-6 border border-slate-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/30 hover:shadow-lg transition-all duration-200 bg-white"
                                         >
-                                            <div className="bg-gray-100 p-3 rounded-full mb-3 text-gray-500 group-hover:bg-blue-200 group-hover:text-blue-700 transition-colors">
-                                                {key === 'Column' || key === 'Row' ? <Icon name="layout" size={24} /> : 
-                                                 key === 'Text' ? <Icon name="type" size={24} /> :
-                                                 key === 'Image' ? <Icon name="image" size={24} /> :
-                                                 <Icon name="box" size={24} />}
+                                            <div className="bg-slate-100 p-4 rounded-full mb-3 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">
+                                                {key === 'Column' || key === 'Row' ? <Icon name="layout" size={28} /> : 
+                                                 key === 'Text' ? <Icon name="type" size={28} /> :
+                                                 key === 'Image' ? <Icon name="image" size={28} /> :
+                                                 <Icon name="box" size={28} />}
                                             </div>
-                                            <span className="text-xs font-bold text-gray-600 group-hover:text-blue-700">{key}</span>
+                                            <span className="text-xs font-bold text-slate-600 group-hover:text-indigo-700">{key}</span>
                                         </button>
                                     ))}
                                 </div>
