@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aero Visual Console</title>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    
+    <style>
+        body { background-color: #f3f4f6; font-family: 'Inter', sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        /* Simple emoji font fix */
+        .emoji-icon { font-style: normal; line-height: 1; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- 1. FIREBASE CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAuEEceU4anDuys1MoxksGkoFV9D9J0KGA",
+            authDomain: "aero-backend-6f7b1.firebaseapp.com",
+            projectId: "aero-backend-6f7b1",
+            storageBucket: "aero-backend-6f7b1.firebasestorage.app",
+            messagingSenderId: "147697876494",
+            appId: "1:147697876494:web:0eaf39ea6f98a76898865f",
+            measurementId: "G-X911SP4TCZ"
+        };
+
+        // Initialize Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        // --- 2. WIDGET TEMPLATES ---
+        const WIDGET_TEMPLATES = {
+            'Column': {
+                type: 'Column',
+                crossAxisAlignment: 'start',
+                mainAxisAlignment: 'start',
+                padding: [0, 0, 0, 0],
+                children: []
+            },
+            'Row': {
+                type: 'Row',
+                crossAxisAlignment: 'center',
+                mainAxisAlignment: 'start',
+                children: []
+            },
+            'Text': {
+                type: 'Text',
+                data: 'New Text',
+                style: 'bodyMedium',
+                color: '#000000'
+            },
+            'SizedBox': {
+                type: 'SizedBox',
+                height: 20,
+                width: 20
+            },
+            'Image': {
+                type: 'Image',
+                url: 'https://via.placeholder.com/150',
+                width: 100,
+                height: 100
+            },
+            'Button': {
+                type: 'Button',
+                label: 'Click Me',
+                actionType: 'NONE'
+            },
+            'TextField': {
+                type: 'TextField',
+                label: 'Enter text',
+                placeholder: 'Placeholder...'
+            }
+        };
+
+        // --- 3. HELPER COMPONENTS ---
+        const Icon = ({ name, size = 16, className }) => {
+            const iconMap = {
+                'layout': '🔲',
+                'type': 'Tt',
+                'image': '🖼️',
+                'box': '⬜',
+                'mouse-pointer-2': '👆',
+                'plus': '+',
+                'trash-2': '🗑️',
+                'loader-2': '⏳',
+                'rocket': '🚀',
+                'x': '✕',
+                'alert-triangle': '⚠️',
+                'check': '✅'
+            };
+
+            return (
+                <span 
+                    className={`emoji-icon ${className || ''}`}
+                    style={{ fontSize: size }}
+                >
+                    {iconMap[name] || '?'}
+                </span>
+            );
+        };
+
+        // --- 4. MAIN APPLICATION ---
+        const App = () => {
+            const [specId, setSpecId] = React.useState('new_screen');
+            const [spec, setSpec] = React.useState(null);
+            const [selectedPath, setSelectedPath] = React.useState([]); 
+            const [loading, setLoading] = React.useState(false);
+            const [status, setStatus] = React.useState('Initializing...');
+            const [showAddModal, setShowAddModal] = React.useState(false);
+            
+            // Error States
+            const [authError, setAuthError] = React.useState(null);
+            const [dbError, setDbError] = React.useState(null);
+
+            // Initial Load
+            React.useEffect(() => {
+                initializeApp();
+            }, []); 
+
+            // Refresh when specId changes
+            React.useEffect(() => {
+                if (!loading && !dbError) {
+                    fetchSpec();
+                }
+            }, [specId]);
+
+            const initializeApp = async () => {
+                setLoading(true);
+                setAuthError(null);
+                setDbError(null);
+                
+                try {
+                    // Try to sign in anonymously
+                    await auth.signInAnonymously();
+                    setStatus('Authenticated');
+                    // Once authenticated, fetch data
+                    await fetchSpec();
+                } catch (err) {
+                    console.error("Auth Error:", err);
+                    if (err.code === 'auth/configuration-not-found' || err.code === 'auth/operation-not-allowed') {
+                        setAuthError('Anonymous Authentication is not enabled in Firebase Console.');
+                        // Try to fetch anyway in case rules are public, but likely will fail
+                        await fetchSpec();
+                    } else {
+                        setAuthError(err.message);
+                    }
+                }
+                setLoading(false);
+            };
+
+            // --- FIREBASE FUNCTIONS ---
+            const fetchSpec = async () => {
+                setStatus('Loading data...');
+                try {
+                    const doc = await db.collection('aero_specs').doc(specId).get();
+                    if (doc.exists && doc.data().spec) {
+                        setSpec(doc.data().spec);
+                        setStatus('Loaded successfully.');
+                    } else {
+                        // Default starter spec
+                        setSpec(WIDGET_TEMPLATES['Column']);
+                        setStatus('New spec created (unsaved).');
+                    }
+                    setSelectedPath([]); // Reset selection
+                    setDbError(null); // Clear db errors if successful
+                } catch (err) {
+                    console.error("Fetch Error:", err);
+                    if (err.code === 'permission-denied') {
+                        setDbError('Missing Permissions');
+                    } else {
+                        setDbError(err.message);
+                    }
+                    setStatus('Error loading data');
+                }
+            };
+
+            const saveSpec = async () => {
+                setLoading(true);
+                setStatus('Saving...');
+                try {
+                    await db.collection('aero_specs').doc(specId).set({ 
+                        spec,
+                        lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    setStatus('Saved to Firebase!');
+                    setTimeout(() => setStatus(''), 3000);
+                } catch (err) {
+                    console.error("Save Error:", err);
+                    if (err.code === 'permission-denied') {
+                        setDbError('Missing Permissions');
+                        alert("Permission Denied: Could not save to database. Check Firebase Rules.");
+                    } else {
+                        alert("Error saving: " + err.message);
+                    }
+                    setStatus('Error saving');
+                }
+                setLoading(false);
+            };
+
+            // --- TREE LOGIC ---
+            const getNode = (path, currentSpec = spec) => {
+                if (path.length === 0) return currentSpec;
+                let current = currentSpec;
+                for (let key of path) {
+                    if (current && current[key] !== undefined) {
+                        current = current[key];
+                    } else {
+                        return null;
+                    }
+                }
+                return current;
+            };
+
+            const updateNode = (path, newData) => {
+                const newSpec = JSON.parse(JSON.stringify(spec));
+                if (path.length === 0) {
+                    setSpec({ ...newSpec, ...newData });
+                    return;
+                }
+                let current = newSpec;
+                for (let i = 0; i < path.length - 1; i++) {
+                    current = current[path[i]];
+                }
+                current[path[path.length - 1]] = { ...current[path[path.length - 1]], ...newData };
+                setSpec(newSpec);
+            };
+
+            const addChild = (parentPath, widgetType) => {
+                const newSpec = JSON.parse(JSON.stringify(spec));
+                const newWidget = JSON.parse(JSON.stringify(WIDGET_TEMPLATES[widgetType]));
+
+                if (parentPath.length === 0) {
+                    if (!newSpec.children) newSpec.children = [];
+                    newSpec.children.push(newWidget);
+                } else {
+                    let current = newSpec;
+                    for (let key of parentPath) {
+                        current = current[key];
+                    }
+                    if (!current.children) current.children = [];
+                    current.children.push(newWidget);
+                }
+                setSpec(newSpec);
+                setShowAddModal(false);
+            };
+
+            const deleteNode = (path) => {
+                if (path.length === 0) {
+                    alert("Cannot delete root node. You can only modify it.");
+                    return;
+                }
+                const newSpec = JSON.parse(JSON.stringify(spec));
+                let parent = newSpec;
+                for (let i = 0; i < path.length - 2; i++) {
+                    parent = parent[path[i]];
+                }
+                const index = path[path.length - 1];
+                parent[path[path.length - 2]].splice(index, 1);
+                
+                setSpec(newSpec);
+                setSelectedPath([]); 
+            };
+
+            // --- UI SUB-COMPONENTS ---
+            const SetupGuide = () => (
+                <div className="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+                        <h2 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">
+                            <Icon name="alert-triangle" size={24}/> Connection Issue
+                        </h2>
+                        
+                        {authError && (
+                            <div className="mb-6 p-4 bg-orange-50 border border-orange-200 rounded text-sm text-orange-800">
+                                <strong className="block mb-1">Authentication Error:</strong>
+                                {authError}
+                                <div className="mt-2 text-xs text-orange-600">
+                                    <strong>Fix:</strong> Go to Firebase Console &rarr; Build &rarr; Authentication &rarr; Sign-in method &rarr; Enable <strong>Anonymous</strong>.
+                                </div>
+                            </div>
+                        )}
+
+                        {dbError === 'Missing Permissions' && (
+                            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+                                <strong className="block mb-1">Database Permission Denied:</strong>
+                                Your Firestore Security Rules are blocking access.
+                                <div className="mt-2 text-xs text-slate-600 bg-slate-100 p-2 rounded font-mono border border-slate-200">
+                                    allow read, write: if true; <span className="text-gray-400">// For Test Mode</span><br/>
+                                    <span className="text-gray-400">OR</span><br/>
+                                    allow read, write: if request.auth != null; <span className="text-gray-400">// If Auth enabled</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <button 
+                            onClick={initializeApp}
+                            className="w-full py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 transition-colors"
+                        >
+                            Retry Connection
+                        </button>
+                    </div>
+                </div>
+            );
+
+            const WidgetTreeItem = ({ node, path, index, level = 0 }) => {
+                const isSelected = JSON.stringify(path) === JSON.stringify(selectedPath);
+                const hasChildren = node.children && Array.isArray(node.children);
+                
+                const handleClick = (e) => {
+                    e.stopPropagation();
+                    setSelectedPath(path);
+                };
+
+                return (
+                    <div>
+                        <div 
+                            className={`flex items-center py-2 px-3 cursor-pointer text-sm mb-0.5 rounded transition-colors
+                                ${isSelected ? 'bg-blue-600 text-white shadow-sm' : 'hover:bg-gray-100 text-gray-700'}
+                            `}
+                            style={{ paddingLeft: `${level * 16 + 12}px` }}
+                            onClick={handleClick}
+                        >
+                            <span className={`mr-2 ${isSelected ? 'opacity-100' : 'opacity-50'}`}>
+                                {node.type === 'Column' || node.type === 'Row' ? <Icon name="layout" size={14} /> : 
+                                 node.type === 'Text' ? <Icon name="type" size={14} /> :
+                                 node.type === 'Image' ? <Icon name="image" size={14} /> :
+                                 <Icon name="box" size={14} />}
+                            </span>
+                            <span className="font-medium truncate">{node.type}</span>
+                            {node.id && <span className={`ml-2 text-xs truncate ${isSelected ? 'text-blue-200' : 'text-gray-400'}`}>#{node.id}</span>}
+                        </div>
+                        
+                        {hasChildren && node.children.map((child, i) => (
+                            <WidgetTreeItem 
+                                key={i} 
+                                node={child} 
+                                path={[...path, 'children', i]} 
+                                index={i} 
+                                level={level + 1}
+                            />
+                        ))}
+                    </div>
+                );
+            };
+
+            const PropertyField = ({ label, children }) => (
+                <div className="mb-4">
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 tracking-wide">{label}</label>
+                    {children}
+                </div>
+            );
+
+            const PropertyEditor = () => {
+                const node = getNode(selectedPath);
+                if (!node) return (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                        <Icon name="mouse-pointer-2" size={48} className="mb-4 opacity-20"/>
+                        <p>Select a widget from the tree to edit</p>
+                    </div>
+                );
+
+                const handleChange = (field, value) => {
+                    updateNode(selectedPath, { [field]: value });
+                };
+
+                return (
+                    <div className="p-6 h-full overflow-y-auto custom-scroll">
+                        <div className="flex justify-between items-start mb-6 border-b border-gray-100 pb-4">
+                            <div>
+                                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                    {node.type}
+                                    <span className="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Widget</span>
+                                </h2>
+                                <div className="text-xs text-gray-400 mt-1 font-mono">path: {selectedPath.length ? selectedPath.join('/') : 'root'}</div>
+                            </div>
+                            <div className="flex gap-2">
+                                { (node.type === 'Column' || node.type === 'Row') && (
+                                    <button 
+                                        onClick={() => setShowAddModal(true)}
+                                        className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 text-sm font-medium transition-colors"
+                                    >
+                                        <Icon name="plus" size={16} className="mr-1.5"/> Add Child
+                                    </button>
+                                )}
+                                {selectedPath.length > 0 && (
+                                    <button 
+                                        onClick={() => deleteNode(selectedPath)}
+                                        className="flex items-center px-3 py-1.5 bg-red-50 text-red-600 rounded-md hover:bg-red-100 text-sm font-medium transition-colors"
+                                    >
+                                        <Icon name="trash-2" size={16} className="mr-1.5"/> Delete
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-lg space-y-1">
+                            {/* Common Props */}
+                            <PropertyField label="Widget ID">
+                                <input 
+                                    type="text" 
+                                    value={node.id || ''} 
+                                    onChange={(e) => handleChange('id', e.target.value)}
+                                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                                    placeholder="e.g. hero_image"
+                                />
+                            </PropertyField>
+
+                            {/* Conditional Props */}
+                            {node.type === 'Text' && (
+                                <>
+                                    <PropertyField label="Text Content">
+                                        <input 
+                                            type="text" 
+                                            value={node.data || ''} 
+                                            onChange={(e) => handleChange('data', e.target.value)}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                    </PropertyField>
+                                    <PropertyField label="Typography">
+                                        <select 
+                                            value={node.style || 'bodyMedium'} 
+                                            onChange={(e) => handleChange('style', e.target.value)}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                        >
+                                            <option value="displayLarge">Display Large (32pt)</option>
+                                            <option value="headlineSmall">Headline Small (24pt)</option>
+                                            <option value="bodyLarge">Body Large (16pt)</option>
+                                            <option value="bodyMedium">Body Medium (14pt)</option>
+                                            <option value="labelSmall">Label Small (11pt)</option>
+                                        </select>
+                                    </PropertyField>
+                                </>
+                            )}
+
+                            {(node.type === 'Column' || node.type === 'Row') && (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <PropertyField label="Main Axis">
+                                        <select 
+                                            value={node.mainAxisAlignment || 'start'} 
+                                            onChange={(e) => handleChange('mainAxisAlignment', e.target.value)}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                                        >
+                                            <option value="start">Start</option>
+                                            <option value="center">Center</option>
+                                            <option value="end">End</option>
+                                            <option value="spaceBetween">Space Between</option>
+                                        </select>
+                                    </PropertyField>
+                                    <PropertyField label="Cross Axis">
+                                        <select 
+                                            value={node.crossAxisAlignment || 'start'} 
+                                            onChange={(e) => handleChange('crossAxisAlignment', e.target.value)}
+                                            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                                        >
+                                            <option value="start">Start</option>
+                                            <option value="center">Center</option>
+                                            <option value="end">End</option>
+                                            <option value="stretch">Stretch</option>
+                                        </select>
+                                    </PropertyField>
+                                </div>
+                            )}
+
+                             {node.type === 'SizedBox' && (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <PropertyField label="Height">
+                                        <input type="number" value={node.height || 0} onChange={(e) => handleChange('height', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                    </PropertyField>
+                                    <PropertyField label="Width">
+                                        <input type="number" value={node.width || 0} onChange={(e) => handleChange('width', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                    </PropertyField>
+                                </div>
+                            )}
+
+                            {node.type === 'Image' && (
+                                <>
+                                    <PropertyField label="Image URL">
+                                        <input type="text" value={node.url || ''} onChange={(e) => handleChange('url', e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                    </PropertyField>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <PropertyField label="Height">
+                                            <input type="number" value={node.height || 100} onChange={(e) => handleChange('height', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                        </PropertyField>
+                                        <PropertyField label="Width">
+                                            <input type="number" value={node.width || 100} onChange={(e) => handleChange('width', Number(e.target.value))} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                                        </PropertyField>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                         <div className="mt-8 pt-6 border-t border-gray-100">
+                            <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">Raw JSON for Selection</h3>
+                            <div className="bg-slate-900 text-green-400 p-3 rounded-md text-xs font-mono overflow-auto max-h-48 border border-slate-700">
+                                <pre>{JSON.stringify(node, (key, value) => (key === 'children' ? '[Array]' : value), 2)}</pre>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            // --- RENDER ---
+            
+            // Show setup guide if errors exist
+            if ((authError || dbError === 'Missing Permissions') && !spec) {
+                return <SetupGuide />;
+            }
+
+            if (!spec) return (
+                <div className="flex flex-col items-center justify-center h-screen bg-gray-50 text-gray-500 gap-3">
+                    <div className="text-blue-600"><Icon name="loader-2" size={32}/></div> 
+                    <p className="font-medium">{status}</p>
+                </div>
+            );
+
+            return (
+                <div className="flex h-screen overflow-hidden text-slate-800">
+                    {/* LEFT: WIDGET TREE */}
+                    <div className="w-80 bg-white border-r border-gray-200 flex flex-col shadow-sm z-10">
+                        <div className="p-4 border-b border-gray-100">
+                            <h1 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                                <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white text-xs font-bold">A</div>
+                                Aero Console
+                            </h1>
+                            <div className="mt-4 flex gap-2">
+                                <input 
+                                    className="flex-1 text-xs bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 focus:outline-none focus:border-blue-500 transition-colors" 
+                                    value={specId} 
+                                    onChange={(e)=>setSpecId(e.target.value)}
+                                    placeholder="Screen ID"
+                                />
+                                <button onClick={() => fetchSpec()} className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs font-medium hover:bg-gray-200 transition-colors">Load</button>
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scroll py-2">
+                            <div className="px-4 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider">Hierarchy</div>
+                            <WidgetTreeItem node={spec} path={[]} index={0} />
+                        </div>
+                    </div>
+
+                    {/* MIDDLE: PROPERTY EDITOR */}
+                    <div className="flex-1 bg-gray-50 overflow-hidden relative flex flex-col">
+                        <div className="flex-1 overflow-hidden">
+                            <PropertyEditor />
+                        </div>
+                    </div>
+
+                    {/* RIGHT: LIVE PREVIEW & SAVE */}
+                    <div className="w-96 bg-white border-l border-gray-200 flex flex-col z-10 shadow-sm">
+                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                            <h3 className="text-sm font-bold text-gray-700">Spec JSON</h3>
+                            <div className={`text-xs font-medium px-2 py-1 rounded ${status.includes('Error') ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                                {status || 'Ready'}
+                            </div>
+                        </div>
+                        
+                        <div className="flex-1 bg-slate-900 overflow-auto p-4 custom-scroll">
+                            <pre className="text-xs font-mono text-emerald-400 whitespace-pre-wrap font-medium">{JSON.stringify(spec, null, 2)}</pre>
+                        </div>
+
+                        <div className="p-4 border-t border-gray-200 bg-gray-50">
+                            <button 
+                                onClick={saveSpec} 
+                                disabled={loading}
+                                className={`w-full py-3 rounded-lg font-bold shadow-sm transition-all flex items-center justify-center gap-2
+                                    ${loading ? 'bg-gray-300 cursor-not-allowed text-gray-500' : 'bg-blue-600 hover:bg-blue-700 text-white hover:shadow-md'}
+                                `}
+                            >
+                                {loading ? <Icon name="loader-2" className="animate-spin" size={18}/> : <Icon name="rocket" size={18}/>}
+                                {loading ? 'Publishing...' : 'Publish to App'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* MODAL: ADD WIDGET */}
+                    {showAddModal && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                            <div className="bg-white rounded-xl shadow-2xl w-[500px] overflow-hidden transform scale-100 transition-all">
+                                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                    <h3 className="font-bold text-gray-800">Select Widget</h3>
+                                    <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors"><Icon name="x" size={20}/></button>
+                                </div>
+                                <div className="p-6 grid grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto custom-scroll">
+                                    {Object.keys(WIDGET_TEMPLATES).map(key => (
+                                        <button 
+                                            key={key}
+                                            onClick={() => addChild(selectedPath, key)}
+                                            className="group flex flex-col items-center justify-center p-4 border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all duration-200"
+                                        >
+                                            <div className="bg-gray-100 p-3 rounded-full mb-3 text-gray-500 group-hover:bg-blue-200 group-hover:text-blue-700 transition-colors">
+                                                {key === 'Column' || key === 'Row' ? <Icon name="layout" size={24} /> : 
+                                                 key === 'Text' ? <Icon name="type" size={24} /> :
+                                                 key === 'Image' ? <Icon name="image" size={24} /> :
+                                                 <Icon name="box" size={24} />}
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-600 group-hover:text-blue-700">{key}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
